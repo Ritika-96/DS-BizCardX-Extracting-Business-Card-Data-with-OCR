@@ -1,143 +1,114 @@
-import easyocr
-import cv2
+import easyocr as ocr  # OCR
+import streamlit as st  # Web App
+from PIL import Image  # Image Processing
+import numpy as np  # Image Processing
+import mysql.connector
 import pandas as pd
-import re
-import sqlite3
+import cv2
 
-# -------------------------------------------Establishing connection to database-------------------------------------------------------
-conn = sqlite3.connect('business_card.db', check_same_thread=False)
-cursor = conn.cursor()
-# -----------------------------------Creating table in sql------------------------------------------------------------------------------
-table_create_sql = 'CREATE TABLE IF NOT EXISTS mytable (ID INTEGER,Name varchar(225),Designation varchar(225),Company_name varchar(225),Address varchar(225),Contact_number varchar(225),Mail_id varchar(225),Website_link varchar(225),Image BLOB);'
-cursor.execute(table_create_sql)
+# Connect to the database
+db = mysql.connector.connect(
+    host="localhost",
+    user="root",
+    password="Ritika1996",
+    database="business_card"
+)
 
+# Get a cursor to execute SQL queries
+cursor = db.cursor()
 
-def upload_database(image):
-    # ----------------------------------------Getting data from image using easyocr------------------------------------------------------
-    reader = easyocr.Reader(['en'], gpu=False)
-    result = reader.readtext(image, paragraph=True, decoder='wordbeamsearch')
-    # -----------------------------------------converting got data to single string------------------------------------------------------
-    data = []
-    j = 0
-    for i in result:
-        data.append(result[j][1])
-        j += 1
-    data
-    org_reg = " ".join(data)
-    reg = " ".join(data)
-    # ------------------------------------------Separating EMAIL---------------------------------------------------------------------------
-    email_regex = re.compile(r'''(
-	[a-zA-z0-9]+
-	@
-	[a-zA-z0-9]+
-	\.[a-zA-Z]{2,10}
-	)''', re.VERBOSE)
-    email = ''
-    for i in email_regex.findall(reg):
-        email += i
-        reg = reg.replace(i, '')
-    # ------------------------------------------Separating phone number---------------------------------------------------------------------------
-    phoneNumber_regex = re.compile(r'\+*\d{2,3}-\d{3,10}-\d{3,10}')
-    phone_no = ''
-    for numbers in phoneNumber_regex.findall(reg):
-        phone_no = phone_no + ' ' + numbers
-        reg = reg.replace(numbers, '')
-    # ------------------------------------------Separating Address---------------------------------------------------------------------------
-    address_regex = re.compile(r'\d{2,4}.+\d{6}')
-    address = ''
-    for addr in address_regex.findall(reg):
-        address += addr
-        reg = reg.replace(addr, '')
-    # ------------------------------------------Separating website link---------------------------------------------------------------------------
-    link_regex = re.compile(r'www.?[\w.]+', re.IGNORECASE)
-    link = ''
-    for lin in link_regex.findall(reg):
-        link += lin
-        reg = reg.replace(lin, '')
-    # ------------------------------------------Separating Designation (only suitable for this dataset)----------------------------------------
-    desig_list = ['DATA MANAGER', 'CEO & FOUNDER',
-                  'General Manager', 'Marketing Executive', 'Technical Manager']
-    designation = ''
-    for i in desig_list:
-        if re.search(i, reg):
-            designation += i
-            reg = reg.replace(i, '')
-    # ------------------------------------------Separating Company name (only suitable for this dataset)--------------------------------------
-    # ----------------------------------to overcome this combine all the three datas to single column ----------------------------------------
-    comp_name_list = ['selva digitals', 'GLOBAL INSURANCE',
-                      'BORCELLE AIRLINES', 'Family Restaurant', 'Sun Electricals']
-    company_name = ''
-    for i in comp_name_list:
-        if re.search(i, reg, flags=re.IGNORECASE):
-            company_name += i
-            reg = reg.replace(i, '')
-    name = reg.strip()
+# Create the ocr_results table if it doesn't exist
+cursor.execute(
+    "CREATE TABLE IF NOT EXISTS ocr_results (id INT AUTO_INCREMENT PRIMARY KEY, image_name VARCHAR(255), result_text TEXT)")
 
-    # ------------------------------------reading and getting byte values of image-----------------------------------------------------------
-    with open(image, 'rb') as file:
-        blobimg = file.read()
-    # -----------------------------------------inserting data into table---------------------------------------------------------------------
-    image_insert = 'INSERT INTO mytable (Name, Designation, Company_name, Address, Contact_number,Mail_id,Website_link,Image) VALUES (?,?,?,?,?,?,?,?);'
-    cursor.execute(image_insert, (name, designation, company_name,
-                   address, phone_no, email, link, blobimg))
+# title
+st.title("BizCardX: Extracting Business Card Data with OCR")
+
+# image uploader
+image = st.file_uploader(label="Upload your image here", type=['png', 'jpg', 'jpeg'])
 
 
-def extracted_data(image):
-    reader = easyocr.Reader(['en'], gpu=False)
-    result = reader.readtext(image, paragraph=True, decoder='wordbeamsearch')
-    img = cv2.imread(image)
-    for detection in result:
-        top_left = tuple([int(val) for val in detection[0][0]])
-        bottom_right = tuple([int(val) for val in detection[0][2]])
-        text = detection[1]
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        img = cv2.rectangle(img, top_left, bottom_right, (204, 0, 34), 5)
-        img = cv2.putText(img, text, top_left, font, 0.8,
-                          (0, 0, 255), 2, cv2.LINE_AA)
-
-    # plt.figure(figsize=(10, 10))
-    # plt.imshow(img)
-    # plt.show()
-    return img
+@st.cache_data
+def load_model():
+    reader = ocr.Reader(['en'], model_storage_directory='.')
+    return reader
 
 
-def show_database():
-    new_df = pd.read_sql("SELECT * FROM mytable", con=conn)
-    return new_df
+reader = load_model()  # load model
 
+if image is not None:
 
-import streamlit as st
-import function
+    input_image = Image.open(image)  # read image
+    # Perform image processing techniques to enhance the image quality before passing it to the OCR engine
+    # Convert the image to a numpy array
+    img_np = np.array(input_image)
 
-# ------------------------------------------setting page configuration in streamlit---------------------------------------------------------
-st.set_page_config(page_title='Bizcardx Extraction', layout="wide")
+    # Apply image processing techniques
+    # Resize the image to reduce processing time and improve OCR accuracy
+    resized = cv2.resize(img_np, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_CUBIC)
 
-data_extraction, database_side = st.tabs(
-    ['Data uploading and Viewing', 'Database side'])
-file_name = 'ocrfile'
-with data_extraction:
-    st.subheader(':violet[Choose image file to extract data]')
-    # ---------------------------------------------- Uploading file to streamlit app ------------------------------------------------------
-    uploaded = st.file_uploader('Choose a image file')
-    # --------------------------------------- Convert binary values of image to IMAGE ---------------------------------------------------
-    if uploaded is not None:
-        with open(f'{file_name}.png', 'wb') as f:
-            f.write(uploaded.getvalue())
-        # ----------------------------------------Extracting data from image (Image view)-------------------------------------------------
-        st.subheader(':violet[Image view of Data]')
-        if st.button('Extract Data from Image'):
-            extracted = extracted_data(f'{file_name}.png')
-            st.image(extracted)
+    # Apply Gaussian blur to remove noise
+    blurred = cv2.GaussianBlur(resized, (5, 5), 0)
 
-        # ----------------------------------------upload data to database----------------------------------------------------------------
-        st.subheader(':violet[Upload extracted to Database]')
-        if st.button('Upload data'):
-            upload_database(f'{file_name}.png')
-            st.success('Data uploaded to Database successfully!', icon="✅")
-# --------------------------------------------getting data from database and storing in df variable---------------------------------------
-df = show_database()
-with database_side:
-    # ----------------------------------------Showing all datas in database---------------------------------------------------------------
-    st.title(':violet[All Data in Database]')
-    if st.button('Show All'):
-        st.dataframe(df)
+    # Convert the image to grayscale
+    gray = cv2.cvtColor(blurred, cv2.COLOR_BGR2GRAY)
+
+    # Apply adaptive thresholding to binarize the image
+    threshold = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 11, 2)
+
+    # Perform OCR on the processed image
+    result = reader.readtext(threshold)
+
+    result_text = []  # empty list for results
+    st.image(input_image)  # display image
+
+    with st.spinner("🤖 AI is at Work! "):
+
+        result = reader.readtext(np.array(input_image))
+
+        result_text = []  # empty list for results
+
+        for text in result:
+            result_text.append(text[1])
+
+        # Display the extracted information in a table
+        st.table({"Text": result_text})
+
+        # Insert the OCR results into the database
+        image_name = image.name
+        result_text_str = ", ".join(result_text)
+        query = "INSERT INTO ocr_results (image_name, result_text) VALUES (%s, %s)"
+        values = (image_name, result_text_str)
+        cursor.execute(query, values)
+        db.commit()
+
+    st.balloons()
+
+else:
+    st.write("Upload an Image")
+
+# Add a section to display the OCR results stored in the database
+st.markdown("## Previously Extracted Information")
+
+cursor.execute("SELECT * FROM ocr_results")
+results = cursor.fetchall()
+
+if len(results) > 0:
+    for result in results:
+        st.write(f"Image Name: {result[1]}")
+        st.write(f"Result Text: {result[2]}")
+        st.write("---")
+
+# Add a section to delete OCR results from the database
+st.markdown("## Delete Extracted Information")
+result_to_delete = st.selectbox("Select result to delete", [result[2] for result in results])
+if st.button("Delete"):
+    cursor.execute(f"DELETE FROM ocr_results WHERE result_text = '{result_to_delete}'")
+    db.commit()
+    st.write(f"Result '{result_to_delete}' deleted successfully.")
+
+# to display the data from database
+st.markdown("## Display the table")
+query = 'select * from ocr_results'
+df = pd.read_sql(query, db)
+st.dataframe(df)
